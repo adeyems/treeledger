@@ -43,3 +43,7 @@ Manifest JSON now streams into the temporary staging file through a 16 MiB write
 ## Explicit exclusion policies
 
 Repeat `--exclude cache` or `--exclude fixtures/generated.json` to omit an exact relative path and its descendants. Paths are case-sensitive with slash separators, not globs; traversal and absolute paths are rejected. Rules are sorted and deduplicated, limited to 100 paths of 4096 bytes each. Scoped manifests use version 2 and include exclusions; complete means complete only within this declared scope. Excluded entries consume the traversal budget but their descendants are not visited. The report does not enumerate every omitted descendant. Comparisons reject different policies and manifests containing excluded entries. Version-1 manifests without exclusions remain readable; scans without rules still emit version 1.
+
+## Explicit staged-manifest recovery
+
+`treeledger recover STAGED.json NEW.json` validates a complete manifest and republishes it through synced staging and exclusive atomic publication. It preserves the source and refuses existing destinations, incomplete scans, malformed JSON and oversized input. Use it only for a fully written staging file left after interruption; a partially written scan needs a new scan. Recovery validates recorded structure, not whether the filesystem still matches its historical hashes. Orphan discovery/cleanup, scan resumption and directory-fsync power-loss guarantees remain future work.

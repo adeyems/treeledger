@@ -126,3 +126,35 @@ fn cli_budget_and_existing_output_are_portable() {
     assert_eq!(fs::read(&output).unwrap(), bytes);
     assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
 }
+
+#[test]
+fn recovery_requires_complete_valid_manifest_and_never_overwrites() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join(".treeledger-orphan");
+    let output = temp.path().join("recovered.json");
+    let invoke = || {
+        Command::new(env!("CARGO_BIN_EXE_treeledger"))
+            .arg("recover")
+            .arg(&source)
+            .arg(&output)
+            .output()
+            .unwrap()
+    };
+    for invalid in [
+        r#"{"version":1"#,
+        r#"{"version":1,"complete":false,"files":[],"issues":[{"path":"a","reason":"entry_limit"}]}"#,
+    ] {
+        fs::write(&source, invalid).unwrap();
+        assert_eq!(invoke().status.code(), Some(2));
+        assert!(!output.exists());
+        assert_eq!(fs::read_to_string(&source).unwrap(), invalid);
+    }
+    let valid = r#"{"version":1,"complete":true,"files":[],"issues":[]}"#;
+    fs::write(&source, valid).unwrap();
+    assert!(invoke().status.success());
+    let saved = fs::read(&output).unwrap();
+    assert_eq!(fs::read_to_string(&source).unwrap(), valid);
+    assert_eq!(invoke().status.code(), Some(2));
+    assert_eq!(fs::read(&output).unwrap(), saved);
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+}

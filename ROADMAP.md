@@ -22,3 +22,5 @@ Completed follow-up: bounded output serialization. See README for scope and rema
 Completed compatibility slice: Windows CI matrix and portable CLI budget/publication regression coverage. Cross-platform filename equivalence and adversarial path-race hardening remain out of scope.
 
 Completed scoped milestone: explicit exclusion policies. See README for exact semantics and remaining limitations.
+
+Completed scoped follow-up: explicit staged-manifest recovery. See README for acceptance scope and remaining limitations.

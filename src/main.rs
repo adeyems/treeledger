@@ -384,13 +384,22 @@ fn run(args: &[String]) -> Result<i32> {
             );
             Ok(if manifest.complete { 0 } else { 1 })
         }
+        [command, staged, output] if command == "recover" => {
+            let manifest = load(Path::new(staged))?;
+            if !manifest.complete {
+                return Err("cannot recover an incomplete scan; run a new scan".into());
+            }
+            publish_manifest(Path::new(output), &manifest, 16 * 1024 * 1024)?;
+            println!("{}", serde_json::json!({"recovered":true,"files":manifest.files.len(),"source_preserved":true}));
+            Ok(0)
+        }
         [command, before, after] if command == "compare" => {
             let report = compare(&load(Path::new(before))?, &load(Path::new(after))?)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(if report["match"] == true { 0 } else { 1 })
         }
         _ => Err(
-            "usage: treeledger scan ROOT MANIFEST.json [--max-entries N] [--exclude PATH] | treeledger compare BEFORE.json AFTER.json"
+            "usage: treeledger scan ROOT MANIFEST.json [--max-entries N] [--exclude PATH] | treeledger compare BEFORE.json AFTER.json | treeledger recover STAGED.json NEW.json"
                 .into(),
         ),
     }
@@ -410,6 +419,56 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn process_exit_before_publication_leaves_recoverable_stage() {
+        const KEY: &str = "TREELEDGER_TEST_CRASH_OUTPUT";
+        if let Some(output) = std::env::var_os(KEY) {
+            let _ = publish_with(Path::new(&output), |file| {
+                file.write_all(br#"{"version":1,"complete":true,"files":[],"issues":[]}"#)?;
+                file.sync_all()?;
+                // Deliberately bypass destructors, as with an interrupted process.
+                std::process::exit(73);
+            });
+            panic!("child did not reach staged write");
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("manifest.json");
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::process_exit_before_publication_leaves_recoverable_stage",
+            ])
+            .env(KEY, &output)
+            .output()
+            .unwrap();
+        assert_eq!(child.status.code(), Some(73));
+        assert!(!output.exists());
+        let stages: Vec<_> = fs::read_dir(temp.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(stages.len(), 1);
+        assert!(
+            stages[0]
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with(".treeledger-")
+        );
+        assert_eq!(
+            run(&[
+                "recover".into(),
+                stages[0].to_str().unwrap().into(),
+                output.to_str().unwrap().into()
+            ])
+            .unwrap(),
+            0
+        );
+        assert!(load(&output).unwrap().complete);
+        assert!(stages[0].exists());
+    }
+
     #[test]
     fn exclusions_are_visible_scoped_and_must_match() {
         let temp = tempfile::tempdir().unwrap();
