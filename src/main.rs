@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     env,
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
     path::Path,
 };
@@ -218,6 +218,22 @@ fn compare(before: &Manifest, after: &Manifest) -> Result<serde_json::Value> {
     Ok(serde_json::json!({"version":1,"match":changes.is_empty(),"changes":changes}))
 }
 
+// Stage in the destination directory so publication stays on one filesystem.
+// persist_noclobber never replaces an existing output, including a symlink.
+fn publish_with(output: &Path, write: impl FnOnce(&mut File) -> Result<()>) -> Result<()> {
+    let parent = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut staged = tempfile::Builder::new()
+        .prefix(".treeledger-")
+        .tempfile_in(parent)?;
+    write(staged.as_file_mut())?;
+    staged.as_file().sync_all()?;
+    staged.persist_noclobber(output)?;
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<i32> {
     match args {
         [command, root, output] if command == "scan" => {
@@ -239,11 +255,10 @@ fn run(args: &[String]) -> Result<i32> {
             if encoded.len() > 16 * 1024 * 1024 {
                 return Err("manifest exceeds 16 MiB; nothing written".into());
             }
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(output)?;
-            file.write_all(&encoded)?;
+            publish_with(output, |file| {
+                file.write_all(&encoded)?;
+                Ok(())
+            })?;
             println!(
                 "{}",
                 serde_json::json!({"complete":manifest.complete,"files":manifest.files.len(),"issues":manifest.issues.len()})
@@ -276,6 +291,45 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn publication_failure_cleans_staging_and_preserves_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = temp.path().join("manifest.json");
+        let result = publish_with(&out, |file| {
+            file.write_all(b"partial")?;
+            assert!(!out.exists());
+            Err("injected write failure".into())
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+        fs::write(&out, b"existing").unwrap();
+        assert!(
+            publish_with(&out, |f| {
+                f.write_all(b"new")?;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(fs::read(&out).unwrap(), b"existing");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn destination_created_during_write_is_not_replaced() {
+        let temp = tempfile::tempdir().unwrap();
+        let out = temp.path().join("manifest.json");
+        assert!(
+            publish_with(&out, |f| {
+                f.write_all(b"candidate")?;
+                fs::write(&out, b"winner")?;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(fs::read(out).unwrap(), b"winner");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
     #[test]
     fn hash_known_bytes_and_empty() {
         let temp = tempfile::tempdir().unwrap();

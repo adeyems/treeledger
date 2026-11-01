@@ -4,7 +4,9 @@ Completed milestone 1: Rust CLI, deterministic relative-path manifests, streamed
 
 Remaining candidate work to confirm against genuine personal use:
 
-- Interrupted-scan recovery and atomic manifest publication, including crash/failure tests.
+Completed milestone 2: synced staging files and atomic no-clobber publication, with injected write-failure and destination-race tests.
+
+- Interrupted-scan recovery, orphan-stage cleanup and power-loss durability, including process-crash tests.
 - Incremental scans with a clear cache invalidation policy rather than blindly trusting timestamps.
 - Bounded-memory traversal and large-directory performance measurement.
 - Stronger symlink/path-race handling and cross-platform path semantics.
