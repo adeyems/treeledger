@@ -260,6 +260,36 @@ fn publish_with(output: &Path, write: impl FnOnce(&mut File) -> Result<()>) -> R
     Ok(())
 }
 
+struct LimitedWriter<W> {
+    inner: W,
+    remaining: usize,
+}
+impl<W: Write> Write for LimitedWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.remaining {
+            return Err(std::io::Error::other(
+                "manifest exceeds 16 MiB; nothing published",
+            ));
+        }
+        let written = self.inner.write(bytes)?;
+        self.remaining -= written;
+        Ok(written)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+fn publish_manifest(output: &Path, manifest: &Manifest, limit: usize) -> Result<()> {
+    publish_with(output, |file| {
+        let writer = LimitedWriter {
+            inner: file,
+            remaining: limit,
+        };
+        serde_json::to_writer_pretty(writer, manifest)?;
+        Ok(())
+    })
+}
+
 fn run(args: &[String]) -> Result<i32> {
     match args {
         [command, root, output, options @ ..] if command == "scan" => {
@@ -282,14 +312,7 @@ fn run(args: &[String]) -> Result<i32> {
             }
             let manifest = scan_limited(root_path, limit)?;
             validate(&manifest)?;
-            let encoded = serde_json::to_vec_pretty(&manifest)?;
-            if encoded.len() > 16 * 1024 * 1024 {
-                return Err("manifest exceeds 16 MiB; nothing written".into());
-            }
-            publish_with(output, |file| {
-                file.write_all(&encoded)?;
-                Ok(())
-            })?;
+            publish_manifest(output, &manifest, 16 * 1024 * 1024)?;
             println!(
                 "{}",
                 serde_json::json!({"complete":manifest.complete,"files":manifest.files.len(),"issues":manifest.issues.len()})
@@ -322,6 +345,22 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn oversized_serialization_never_publishes_or_leaves_staging() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("a"), b"a").unwrap();
+        let manifest = scan(&root).unwrap();
+        let output = temp.path().join("out.json");
+        let size = serde_json::to_vec_pretty(&manifest).unwrap().len();
+        assert!(publish_manifest(&output, &manifest, size - 1).is_err());
+        assert!(!output.exists());
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+        publish_manifest(&output, &manifest, size).unwrap();
+        assert_eq!(load(&output).unwrap().files, manifest.files);
+    }
+
     #[test]
     fn traversal_budget_marks_partial_results_and_counts_directories() {
         let temp = tempfile::tempdir().unwrap();

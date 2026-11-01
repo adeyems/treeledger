@@ -16,3 +16,5 @@ Completed milestone 2: synced staging files and atomic no-clobber publication, w
 Do not count these as verified hours or guaranteed programme eligibility. Keep data synthetic. This is a directory-change tool, not a backup or vulnerability scanner.
 
 Completed milestone 3: configurable global traversal-entry budget, explicit incomplete coverage and comparison refusal. Byte-bounded storage and performance benchmarking remain future work.
+
+Completed follow-up: bounded output serialization. See README for scope and remaining limitations.
