@@ -31,3 +31,7 @@ Use trusted, quiescent synthetic directories only. This is not a filesystem snap
 Manifests disclose filenames, sizes and hashes; hashes are not anonymization. Do not scan customer/personal data, credentials or confidential directories for this project. Root symlinks are rejected. Windows is not currently covered by CI; Linux and macOS are the initial targets. Hard links are represented as separate paths. No incremental scans, recovery, exclusions, parallel hashing or signed manifests yet.
 
 MIT licensed. See `ROADMAP.md`; no claim of production readiness or programme eligibility.
+
+## Traversal budget
+
+Use `scan ROOT OUTPUT --max-entries N` to limit visited entries (1–100000; default 100000). Files, directories, skipped paths and directory-entry errors consume the shared budget. If more entries remain, scanning stops globally with an `entry_limit` issue and exit 1; comparison refuses the incomplete manifest. The retained subset depends on filesystem traversal order. This caps entry count, not byte memory, file sizes or elapsed time; the 16 MiB serialized-output limit still applies.

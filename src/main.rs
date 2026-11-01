@@ -59,7 +59,13 @@ fn hash_file(path: &Path) -> Result<(u64, String)> {
     Ok((size, format!("{:x}", hasher.finalize())))
 }
 
-fn walk(root: &Path, dir: &Path, manifest: &mut Manifest) {
+fn walk(
+    root: &Path,
+    dir: &Path,
+    manifest: &mut Manifest,
+    remaining: &mut usize,
+    stopped: &mut bool,
+) {
     let relative = |p: &Path| {
         p.strip_prefix(root)
             .unwrap_or(p)
@@ -79,6 +85,18 @@ fn walk(root: &Path, dir: &Path, manifest: &mut Manifest) {
         }
     };
     for item in entries {
+        if *stopped {
+            return;
+        }
+        if *remaining == 0 {
+            manifest.issues.push(Issue {
+                path: String::new(),
+                reason: "entry_limit".into(),
+            });
+            *stopped = true;
+            return;
+        }
+        *remaining -= 1;
         let item = match item {
             Ok(item) => item,
             Err(_) => {
@@ -106,7 +124,7 @@ fn walk(root: &Path, dir: &Path, manifest: &mut Manifest) {
             match fs::symlink_metadata(&path) {
                 Ok(meta) if meta.file_type().is_symlink() => Some("skipped_symlink"),
                 Ok(meta) if meta.is_dir() => {
-                    walk(root, &path, manifest);
+                    walk(root, &path, manifest, remaining, stopped);
                     None
                 }
                 Ok(meta) if meta.is_file() => match hash_file(&path) {
@@ -133,7 +151,15 @@ fn walk(root: &Path, dir: &Path, manifest: &mut Manifest) {
     }
 }
 
+#[cfg(test)]
 fn scan(root: &Path) -> Result<Manifest> {
+    scan_limited(root, 100_000)
+}
+
+fn scan_limited(root: &Path, limit: usize) -> Result<Manifest> {
+    if limit == 0 || limit > 100_000 {
+        return Err("entry limit must be 1 to 100000".into());
+    }
     let metadata = fs::symlink_metadata(root)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err("root must be a real directory, not a symlink".into());
@@ -144,7 +170,7 @@ fn scan(root: &Path) -> Result<Manifest> {
         files: vec![],
         issues: vec![],
     };
-    walk(root, root, &mut result);
+    walk(root, root, &mut result, &mut { limit }, &mut false);
     result.files.sort_by(|a, b| a.path.cmp(&b.path));
     result
         .issues
@@ -236,7 +262,12 @@ fn publish_with(output: &Path, write: impl FnOnce(&mut File) -> Result<()>) -> R
 
 fn run(args: &[String]) -> Result<i32> {
     match args {
-        [command, root, output] if command == "scan" => {
+        [command, root, output, options @ ..] if command == "scan" => {
+            let limit = match options {
+                [] => 100_000,
+                [flag, value] if flag == "--max-entries" => value.parse::<usize>()?,
+                _ => return Err("expected --max-entries N".into()),
+            };
             let root_path = Path::new(root);
             let output = Path::new(output);
             let parent = output
@@ -249,7 +280,7 @@ fn run(args: &[String]) -> Result<i32> {
             {
                 return Err("manifest output must be outside scan root".into());
             }
-            let manifest = scan(root_path)?;
+            let manifest = scan_limited(root_path, limit)?;
             validate(&manifest)?;
             let encoded = serde_json::to_vec_pretty(&manifest)?;
             if encoded.len() > 16 * 1024 * 1024 {
@@ -271,7 +302,7 @@ fn run(args: &[String]) -> Result<i32> {
             Ok(if report["match"] == true { 0 } else { 1 })
         }
         _ => Err(
-            "usage: treeledger scan ROOT MANIFEST.json | treeledger compare BEFORE.json AFTER.json"
+            "usage: treeledger scan ROOT MANIFEST.json [--max-entries N] | treeledger compare BEFORE.json AFTER.json"
                 .into(),
         ),
     }
@@ -291,6 +322,23 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn traversal_budget_marks_partial_results_and_counts_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("nested")).unwrap();
+        fs::write(temp.path().join("nested/a"), b"a").unwrap();
+        fs::write(temp.path().join("nested/b"), b"b").unwrap();
+        let limited = scan_limited(temp.path(), 2).unwrap();
+        assert!(!limited.complete);
+        assert_eq!(limited.files.len(), 1);
+        assert_eq!(limited.issues.len(), 1);
+        assert_eq!(limited.issues[0].reason, "entry_limit");
+        assert!(compare(&limited, &limited).is_err());
+        assert!(scan_limited(temp.path(), 3).unwrap().complete);
+        assert!(scan_limited(temp.path(), 0).is_err());
+        assert!(scan_limited(temp.path(), 100_001).is_err());
+    }
+
     #[test]
     fn publication_failure_cleans_staging_and_preserves_destination() {
         let temp = tempfile::tempdir().unwrap();
