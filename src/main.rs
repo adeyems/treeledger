@@ -26,6 +26,8 @@ struct Issue {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    exclusions: Vec<String>,
     version: u32,
     complete: bool,
     files: Vec<Entry>,
@@ -109,6 +111,13 @@ fn walk(
         };
         let path = item.path();
         let rel = relative(&path);
+        if manifest
+            .exclusions
+            .iter()
+            .any(|rule| rel == *rule || rel.starts_with(&format!("{rule}/")))
+        {
+            continue;
+        }
         let reason = if path
             .strip_prefix(root)
             .ok()
@@ -156,7 +165,30 @@ fn scan(root: &Path) -> Result<Manifest> {
     scan_limited(root, 100_000)
 }
 
+#[cfg(test)]
 fn scan_limited(root: &Path, limit: usize) -> Result<Manifest> {
+    scan_policy(root, limit, vec![])
+}
+
+fn valid_relative(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|p| !p.is_empty() && p != "." && p != ".." && !p.contains(':'))
+}
+fn scan_policy(root: &Path, limit: usize, mut exclusions: Vec<String>) -> Result<Manifest> {
+    exclusions.sort();
+    exclusions.dedup();
+    if exclusions.len() > 100
+        || exclusions
+            .iter()
+            .any(|p| !valid_relative(p) || p.len() > 4096)
+    {
+        return Err(
+            "exclusions require at most 100 exact relative paths, up to 4096 bytes each".into(),
+        );
+    }
     if limit == 0 || limit > 100_000 {
         return Err("entry limit must be 1 to 100000".into());
     }
@@ -165,7 +197,8 @@ fn scan_limited(root: &Path, limit: usize) -> Result<Manifest> {
         return Err("root must be a real directory, not a symlink".into());
     }
     let mut result = Manifest {
-        version: 1,
+        version: if exclusions.is_empty() { 1 } else { 2 },
+        exclusions,
         complete: true,
         files: vec![],
         issues: vec![],
@@ -180,11 +213,33 @@ fn scan_limited(root: &Path, limit: usize) -> Result<Manifest> {
 }
 
 fn validate(manifest: &Manifest) -> Result<()> {
-    if manifest.version != 1 || manifest.complete != manifest.issues.is_empty() {
+    if !matches!(manifest.version, 1 | 2)
+        || (manifest.version == 1 && !manifest.exclusions.is_empty())
+        || manifest.complete != manifest.issues.is_empty()
+    {
         return Err("invalid manifest version or completeness".into());
+    }
+    if manifest.exclusions.len() > 100
+        || manifest
+            .exclusions
+            .iter()
+            .any(|p| !valid_relative(p) || p.len() > 4096)
+        || manifest
+            .exclusions
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return Err("invalid exclusion policy".into());
     }
     let mut seen = std::collections::BTreeSet::new();
     for entry in &manifest.files {
+        if manifest
+            .exclusions
+            .iter()
+            .any(|rule| entry.path == *rule || entry.path.starts_with(&format!("{rule}/")))
+        {
+            return Err("manifest contains an excluded path".into());
+        }
         if entry.path.is_empty()
             || entry.path.contains('\\')
             || entry
@@ -223,6 +278,9 @@ fn load(path: &Path) -> Result<Manifest> {
 fn compare(before: &Manifest, after: &Manifest) -> Result<serde_json::Value> {
     validate(before)?;
     validate(after)?;
+    if before.exclusions != after.exclusions {
+        return Err("cannot compare different exclusion policies".into());
+    }
     if !before.complete || !after.complete {
         return Err("cannot compare incomplete manifests; inspect scan issues".into());
     }
@@ -241,7 +299,9 @@ fn compare(before: &Manifest, after: &Manifest) -> Result<serde_json::Value> {
             changes.push(serde_json::json!({"path":path,"kind":kind}));
         }
     }
-    Ok(serde_json::json!({"version":1,"match":changes.is_empty(),"changes":changes}))
+    Ok(
+        serde_json::json!({"version":1,"match":changes.is_empty(),"changes":changes,"exclusions":before.exclusions}),
+    )
 }
 
 // Stage in the destination directory so publication stays on one filesystem.
@@ -293,11 +353,16 @@ fn publish_manifest(output: &Path, manifest: &Manifest, limit: usize) -> Result<
 fn run(args: &[String]) -> Result<i32> {
     match args {
         [command, root, output, options @ ..] if command == "scan" => {
-            let limit = match options {
-                [] => 100_000,
-                [flag, value] if flag == "--max-entries" => value.parse::<usize>()?,
-                _ => return Err("expected --max-entries N".into()),
-            };
+            let mut limit = 100_000;
+            let mut exclusions = Vec::new();
+            let mut seen_limit = false;
+            for pair in options.chunks(2) {
+                match pair {
+                    [flag, value] if flag == "--max-entries" && !seen_limit => { limit = value.parse::<usize>()?; seen_limit = true; },
+                    [flag, value] if flag == "--exclude" => exclusions.push(value.clone()),
+                    _ => return Err("expected --max-entries N or --exclude RELATIVE_PATH".into()),
+                }
+            }
             let root_path = Path::new(root);
             let output = Path::new(output);
             let parent = output
@@ -310,7 +375,7 @@ fn run(args: &[String]) -> Result<i32> {
             {
                 return Err("manifest output must be outside scan root".into());
             }
-            let manifest = scan_limited(root_path, limit)?;
+            let manifest = scan_policy(root_path, limit, exclusions)?;
             validate(&manifest)?;
             publish_manifest(output, &manifest, 16 * 1024 * 1024)?;
             println!(
@@ -325,7 +390,7 @@ fn run(args: &[String]) -> Result<i32> {
             Ok(if report["match"] == true { 0 } else { 1 })
         }
         _ => Err(
-            "usage: treeledger scan ROOT MANIFEST.json [--max-entries N] | treeledger compare BEFORE.json AFTER.json"
+            "usage: treeledger scan ROOT MANIFEST.json [--max-entries N] [--exclude PATH] | treeledger compare BEFORE.json AFTER.json"
                 .into(),
         ),
     }
@@ -345,6 +410,24 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exclusions_are_visible_scoped_and_must_match() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("cache")).unwrap();
+        fs::write(temp.path().join("cache/a"), b"a").unwrap();
+        fs::write(temp.path().join("cache-other"), b"b").unwrap();
+        let scoped = scan_policy(temp.path(), 100, vec!["cache".into()]).unwrap();
+        assert!(scoped.complete);
+        assert_eq!(scoped.version, 2);
+        assert_eq!(scoped.files.len(), 1);
+        assert_eq!(scoped.files[0].path, "cache-other");
+        assert!(compare(&scoped, &scan(temp.path()).unwrap()).is_err());
+        assert_eq!(compare(&scoped, &scoped).unwrap()["match"], true);
+        assert!(scan_policy(temp.path(), 100, vec!["../cache".into()]).is_err());
+        let encoded = serde_json::to_vec(&scoped).unwrap();
+        validate(&serde_json::from_slice::<Manifest>(&encoded).unwrap()).unwrap();
+    }
+
     #[test]
     fn oversized_serialization_never_publishes_or_leaves_staging() {
         let temp = tempfile::tempdir().unwrap();
@@ -468,6 +551,7 @@ mod tests {
     fn invalid_manifest_rejected() {
         let mut m = Manifest {
             version: 1,
+            exclusions: vec![],
             complete: true,
             files: vec![],
             issues: vec![],

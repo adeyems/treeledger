@@ -20,3 +20,5 @@ Completed milestone 3: configurable global traversal-entry budget, explicit inco
 Completed follow-up: bounded output serialization. See README for scope and remaining limitations.
 
 Completed compatibility slice: Windows CI matrix and portable CLI budget/publication regression coverage. Cross-platform filename equivalence and adversarial path-race hardening remain out of scope.
+
+Completed scoped milestone: explicit exclusion policies. See README for exact semantics and remaining limitations.

@@ -28,7 +28,7 @@ The output must be outside the scan root, in an existing parent directory, and i
 
 Use trusted, quiescent synthetic directories only. This is not a filesystem snapshot, backup, sandbox or adversarial security tool. Symlinks observed during traversal are skipped, but concurrent path replacement creates check/open races. Length/modification-time checks detect some file changes during hashing, not every race or same-size rewrite. Do not use against directories other processes are modifying. No consistency guarantee spans multiple files.
 
-Manifests disclose filenames, sizes and hashes; hashes are not anonymization. Do not scan customer/personal data, credentials or confidential directories for this project. Root symlinks are rejected. CI now includes Windows alongside Linux and macOS. Unix-only permission and symlink tests are gated; path matching remains case-sensitive in manifests even on case-insensitive filesystems. Windows support is experimental and does not imply cross-platform filename equivalence. Hard links are represented as separate paths. No incremental scans, recovery, exclusions, parallel hashing or signed manifests yet.
+Manifests disclose filenames, sizes and hashes; hashes are not anonymization. Do not scan customer/personal data, credentials or confidential directories for this project. Root symlinks are rejected. CI now includes Windows alongside Linux and macOS. Unix-only permission and symlink tests are gated; path matching remains case-sensitive in manifests even on case-insensitive filesystems. Windows support is experimental and does not imply cross-platform filename equivalence. Hard links are represented as separate paths. No incremental scans, recovery, parallel hashing or signed manifests yet. Explicit exclusions are described below.
 
 MIT licensed. See `ROADMAP.md`; no claim of production readiness or programme eligibility.
 
@@ -39,3 +39,7 @@ Use `scan ROOT OUTPUT --max-entries N` to limit visited entries (1–100000; def
 ## Bounded output serialization
 
 Manifest JSON now streams into the temporary staging file through a 16 MiB writer budget, rather than allocating a complete serialized buffer. Oversized serialization removes staging and publishes no final manifest (exit 2). An exact-limit manifest is allowed. Entry metadata is still collected in memory subject to the traversal-entry budget; this does not provide a strict total-memory bound.
+
+## Explicit exclusion policies
+
+Repeat `--exclude cache` or `--exclude fixtures/generated.json` to omit an exact relative path and its descendants. Paths are case-sensitive with slash separators, not globs; traversal and absolute paths are rejected. Rules are sorted and deduplicated, limited to 100 paths of 4096 bytes each. Scoped manifests use version 2 and include exclusions; complete means complete only within this declared scope. Excluded entries consume the traversal budget but their descendants are not visited. The report does not enumerate every omitted descendant. Comparisons reject different policies and manifests containing excluded entries. Version-1 manifests without exclusions remain readable; scans without rules still emit version 1.
