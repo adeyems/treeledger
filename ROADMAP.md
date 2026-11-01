@@ -18,3 +18,5 @@ Do not count these as verified hours or guaranteed programme eligibility. Keep d
 Completed milestone 3: configurable global traversal-entry budget, explicit incomplete coverage and comparison refusal. Byte-bounded storage and performance benchmarking remain future work.
 
 Completed follow-up: bounded output serialization. See README for scope and remaining limitations.
+
+Completed compatibility slice: Windows CI matrix and portable CLI budget/publication regression coverage. Cross-platform filename equivalence and adversarial path-race hardening remain out of scope.

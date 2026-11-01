@@ -28,7 +28,7 @@ The output must be outside the scan root, in an existing parent directory, and i
 
 Use trusted, quiescent synthetic directories only. This is not a filesystem snapshot, backup, sandbox or adversarial security tool. Symlinks observed during traversal are skipped, but concurrent path replacement creates check/open races. Length/modification-time checks detect some file changes during hashing, not every race or same-size rewrite. Do not use against directories other processes are modifying. No consistency guarantee spans multiple files.
 
-Manifests disclose filenames, sizes and hashes; hashes are not anonymization. Do not scan customer/personal data, credentials or confidential directories for this project. Root symlinks are rejected. Windows is not currently covered by CI; Linux and macOS are the initial targets. Hard links are represented as separate paths. No incremental scans, recovery, exclusions, parallel hashing or signed manifests yet.
+Manifests disclose filenames, sizes and hashes; hashes are not anonymization. Do not scan customer/personal data, credentials or confidential directories for this project. Root symlinks are rejected. CI now includes Windows alongside Linux and macOS. Unix-only permission and symlink tests are gated; path matching remains case-sensitive in manifests even on case-insensitive filesystems. Windows support is experimental and does not imply cross-platform filename equivalence. Hard links are represented as separate paths. No incremental scans, recovery, exclusions, parallel hashing or signed manifests yet.
 
 MIT licensed. See `ROADMAP.md`; no claim of production readiness or programme eligibility.
 

@@ -99,3 +99,30 @@ fn unreadable_file_marks_scan_incomplete_when_permissions_enforced() {
         eprintln!("Permission check unavailable for privileged user");
     }
 }
+
+#[test]
+fn cli_budget_and_existing_output_are_portable() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("files");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+    fs::write(root.join("b.txt"), b"b").unwrap();
+    let output = temp.path().join("limited.json");
+    let invoke = || {
+        Command::new(env!("CARGO_BIN_EXE_treeledger"))
+            .arg("scan")
+            .arg(&root)
+            .arg(&output)
+            .args(["--max-entries", "1"])
+            .output()
+            .unwrap()
+    };
+    assert_eq!(invoke().status.code(), Some(1));
+    let bytes = fs::read(&output).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(manifest["complete"], false);
+    assert_eq!(manifest["issues"][0]["reason"], "entry_limit");
+    assert_eq!(invoke().status.code(), Some(2));
+    assert_eq!(fs::read(&output).unwrap(), bytes);
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+}
